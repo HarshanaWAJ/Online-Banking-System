@@ -10,22 +10,45 @@ import PATHS from '../../routes/routePaths.js';
 import { formatMoney } from '../../utils/formatMoney.js';
 import { formatDateTime } from '../../utils/formatDate.js';
 
+/**
+ * Fund Transfer Component.
+ *
+ * Implements a high-security, 3-step wizard workflow for inter-account fund transfers:
+ *
+ * Step 1: Transfer Details Entry
+ * - Source account selection from active customer accounts
+ * - Quick recipient auto-fill from saved beneficiaries or manual entry
+ * - Client-side amount validation and real-time available balance display
+ *
+ * Step 2: Review & Confirmation (Two-Phase Commitment)
+ * - Invokes backend `POST /api/transfers/preview` to dry-run validation without mutating ledger
+ * - Displays the verified destination account holder's full legal name (preventing wrong-account transfers)
+ * - Generates a cryptographic idempotency key (`crypto.randomUUID()`) to protect against duplicate submissions
+ *
+ * Step 3: Execution & Immutable Receipt
+ * - Invokes backend `POST /api/transfers` with the idempotency key and confirmed payload
+ * - Backend executes atomic row-level locked double-entry bookkeeping (Debit Source, Credit Destination)
+ * - Renders a digital transaction receipt containing the permanent audit reference and timestamp
+ */
 export default function TransferPage() {
   const { showError, showSuccess } = useToast();
 
-  // Wizard Steps: 1: Details, 2: Review, 3: Success Result
+  // Wizard state: 1 = Input Details, 2 = Review & Confirm, 3 = Receipt View
   const [step, setStep] = useState(1);
 
+  // Master data
   const [accounts, setAccounts] = useState([]);
   const [beneficiaries, setBeneficiaries] = useState([]);
   const [loadingInitial, setLoadingInitial] = useState(true);
 
+  // Transaction preview, execution result, and idempotency key
   const [previewData, setPreviewData] = useState(null);
   const [resultData, setResultData] = useState(null);
   const [requestKey, setRequestKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState('');
 
+  // React Hook Form for form state management and input validation
   const {
     register,
     handleSubmit,
@@ -42,9 +65,13 @@ export default function TransferPage() {
     },
   });
 
+  // Watch selected source account to dynamically display available balance
   const selectedSourceId = watch('sourceAccountId');
   const selectedSourceAccount = accounts.find((a) => a.id === Number(selectedSourceId));
 
+  /**
+   * Initializes transfer form by fetching customer's active bank accounts and saved beneficiaries in parallel.
+   */
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -53,6 +80,7 @@ export default function TransferPage() {
           accountApi.getMyAccounts(),
           beneficiaryApi.getMyBeneficiaries(),
         ]);
+        // Only ACTIVE accounts can initiate outgoing transfers
         const activeAccs = (accRes.data.data || []).filter((a) => a.status === 'ACTIVE');
         setAccounts(activeAccs);
         setBeneficiaries(benRes.data.data || []);
@@ -68,7 +96,15 @@ export default function TransferPage() {
     loadData();
   }, [setValue]);
 
-  // Step 1 -> Step 2: Preview & Validate
+  /**
+   * Step 1 -> Step 2: Validates transfer details with backend preview API.
+   *
+   * Dry-runs the transfer to verify:
+   * 1. Destination account exists and is ACTIVE.
+   * 2. Source account has sufficient funds.
+   * 3. Source and destination are not identical.
+   * Generates a unique UUID `requestKey` to ensure idempotent execution in Step 2.
+   */
   const handlePreview = async (data) => {
     setServerError('');
     setSubmitting(true);
@@ -96,7 +132,12 @@ export default function TransferPage() {
     }
   };
 
-  // Step 2 -> Step 3: Post Transfer with RequestKey
+  /**
+   * Step 2 -> Step 3: Executes the atomic fund transfer.
+   *
+   * Posts transfer request with the pre-generated `requestKey`.
+   * On success, transitions wizard to the printable receipt step.
+   */
   const handleConfirmTransfer = async () => {
     setServerError('');
     setSubmitting(true);
@@ -121,6 +162,9 @@ export default function TransferPage() {
     }
   };
 
+  /**
+   * Resets form state and starts a fresh transfer flow.
+   */
   const handleStartNewTransfer = () => {
     reset({
       sourceAccountId: accounts[0]?.id || '',
@@ -166,7 +210,9 @@ export default function TransferPage() {
         </Alert>
       )}
 
-      {/* STEP 1: FORM */}
+      {/* =========================================================================
+          STEP 1: TRANSFER DETAILS ENTRY FORM
+          ========================================================================= */}
       {step === 1 && (
         <Card className="shadow-sm border-0">
           <Card.Header className="bg-white py-3">
@@ -174,7 +220,7 @@ export default function TransferPage() {
           </Card.Header>
           <Card.Body className="p-4">
             <Form onSubmit={handleSubmit(handlePreview)}>
-              {/* Source Account */}
+              {/* Source Account Selection */}
               <Form.Group className="mb-3" controlId="source-account-select">
                 <Form.Label className="fw-semibold">From Account</Form.Label>
                 <Form.Select
@@ -281,7 +327,9 @@ export default function TransferPage() {
         </Card>
       )}
 
-      {/* STEP 2: REVIEW & CONFIRM */}
+      {/* =========================================================================
+          STEP 2: REVIEW & CONFIRMATION SCREEN
+          ========================================================================= */}
       {step === 2 && previewData && (
         <Card className="shadow-sm border-0">
           <Card.Header className="bg-white py-3">
@@ -339,7 +387,9 @@ export default function TransferPage() {
         </Card>
       )}
 
-      {/* STEP 3: TRANSACTION RECEIPT */}
+      {/* =========================================================================
+          STEP 3: TRANSACTION SUCCESS RECEIPT
+          ========================================================================= */}
       {step === 3 && resultData && (
         <Card className="shadow-sm border-0">
           <Card.Body className="p-5 text-center">

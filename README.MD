@@ -56,7 +56,7 @@ Hibernate ORM (`ddl-auto: update`) will automatically generate all necessary tab
 
 3. Run the backend:
    ```bash
-   mvn spring-boot:run
+   .\mvnw.cmd spring-boot:run
    ```
    *Or run `BankingSystemApplication.java` directly inside your IDE.*
 

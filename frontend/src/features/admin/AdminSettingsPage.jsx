@@ -3,14 +3,42 @@ import { Alert, Badge, Button, Card, Col, Form, InputGroup, Row, Spinner } from 
 import { adminSettingsApi } from '../../api/adminSettings.api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 
+/**
+ * System Settings & Policy Configuration Console (Role: ADMIN).
+ *
+ * Provides a unified administrative interface to inspect and modify global runtime policies:
+ * 1. Financial Limits:
+ *    - Daily aggregate outbound transfer ceiling per customer
+ *    - Single-transaction transfer threshold
+ *    - Minimum initial deposit required upon account opening
+ *    - Annual percentage interest rate (p.a.) for savings accounts
+ *
+ * 2. Security & Session Policies:
+ *    - Session inactivity timeout in minutes
+ *    - Maximum consecutive failed login attempts before rate limiting locks out IP/account
+ *    - Fixed system operational currency (LKR)
+ *
+ * 3. Operational Controls:
+ *    - System maintenance mode toggle and broadcast announcement banner
+ *
+ * State Mapping Pattern:
+ * - Backend persists settings as key-value pairs in the `system_setting` table (`settingKey`, `settingValue`).
+ * - This component converts the array of records into a dictionary (`settings` map) on load,
+ *   enabling O(1) field bindings and clean payload submission on save.
+ */
 export default function AdminSettingsPage() {
   const { showSuccess, showError } = useToast();
 
+  // Dictionary map of settingKey -> settingValue (e.g. { DAILY_TRANSFER_LIMIT: '500000.00', ... })
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  /**
+   * Fetches all global system settings from the backend REST endpoint.
+   * Transforms the array response `[{ settingKey, settingValue }, ...]` into a plain dictionary.
+   */
   const fetchSettings = async () => {
     try {
       setLoading(true);
@@ -29,14 +57,25 @@ export default function AdminSettingsPage() {
     }
   };
 
+  // Load settings on initial component mount
   useEffect(() => {
     fetchSettings();
   }, []);
 
+  /**
+   * Updates an individual setting value in local state.
+   *
+   * @param {string} key - Setting key (e.g. 'DAILY_TRANSFER_LIMIT')
+   * @param {string} value - New stringified value
+   */
   const handleChange = (key, value) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
   };
 
+  /**
+   * Submits the updated dictionary map of settings to the backend.
+   * Triggers audit trail logging on the server.
+   */
   const handleSave = async (e) => {
     e.preventDefault();
     try {
@@ -64,6 +103,7 @@ export default function AdminSettingsPage() {
 
   return (
     <div className="container-fluid py-2">
+      {/* Header & Quick Action Buttons */}
       <div className="d-flex justify-content-between align-items-center mb-4 pb-2 border-bottom">
         <div>
           <h2 className="h4 fw-bold mb-1">System Settings & Policies</h2>
@@ -101,7 +141,9 @@ export default function AdminSettingsPage() {
 
       <Form onSubmit={handleSave}>
         <Row className="g-4">
-          {/* Financial Limits */}
+          {/* =========================================================================
+              SECTION 1: FINANCIAL LIMITS & RULES
+              ========================================================================= */}
           <Col md={6}>
             <Card className="shadow-sm h-100">
               <Card.Header className="bg-light fw-bold d-flex align-items-center">
@@ -109,6 +151,7 @@ export default function AdminSettingsPage() {
                 Financial Limits & Rules (LKR)
               </Card.Header>
               <Card.Body>
+                {/* Daily Aggregated Limit */}
                 <Form.Group className="mb-3" controlId="dailyTransferLimit">
                   <Form.Label className="fw-semibold small">Daily Aggregated Transfer Limit</Form.Label>
                   <InputGroup>
@@ -126,6 +169,7 @@ export default function AdminSettingsPage() {
                   </Form.Text>
                 </Form.Group>
 
+                {/* Single Transaction Cap */}
                 <Form.Group className="mb-3" controlId="singleTransferLimit">
                   <Form.Label className="fw-semibold small">Single Transaction Limit</Form.Label>
                   <InputGroup>
@@ -143,6 +187,7 @@ export default function AdminSettingsPage() {
                   </Form.Text>
                 </Form.Group>
 
+                {/* Minimum Initial Opening Deposit */}
                 <Form.Group className="mb-3" controlId="minOpeningDeposit">
                   <Form.Label className="fw-semibold small">Minimum Opening Deposit</Form.Label>
                   <InputGroup>
@@ -160,6 +205,7 @@ export default function AdminSettingsPage() {
                   </Form.Text>
                 </Form.Group>
 
+                {/* Savings Account Annual Interest Rate */}
                 <Form.Group className="mb-0" controlId="savingsInterestRate">
                   <Form.Label className="fw-semibold small">Savings Annual Interest Rate</Form.Label>
                   <InputGroup>
@@ -181,7 +227,9 @@ export default function AdminSettingsPage() {
             </Card>
           </Col>
 
-          {/* Security & Sessions */}
+          {/* =========================================================================
+              SECTION 2: SECURITY & SESSION POLICIES
+              ========================================================================= */}
           <Col md={6}>
             <Card className="shadow-sm h-100">
               <Card.Header className="bg-light fw-bold d-flex align-items-center">
@@ -189,6 +237,7 @@ export default function AdminSettingsPage() {
                 Security & Session Policies
               </Card.Header>
               <Card.Body>
+                {/* Session Inactivity Timeout */}
                 <Form.Group className="mb-3" controlId="sessionTimeout">
                   <Form.Label className="fw-semibold small">Session Inactivity Timeout</Form.Label>
                   <InputGroup>
@@ -206,6 +255,7 @@ export default function AdminSettingsPage() {
                   </Form.Text>
                 </Form.Group>
 
+                {/* Maximum Failed Login Attempts */}
                 <Form.Group className="mb-3" controlId="maxLoginAttempts">
                   <Form.Label className="fw-semibold small">Max Failed Login Attempts</Form.Label>
                   <InputGroup>
@@ -223,6 +273,7 @@ export default function AdminSettingsPage() {
                   </Form.Text>
                 </Form.Group>
 
+                {/* System Currency */}
                 <Form.Group className="mb-0" controlId="operatingCurrency">
                   <Form.Label className="fw-semibold small">System Operating Currency</Form.Label>
                   <Form.Control
@@ -238,7 +289,9 @@ export default function AdminSettingsPage() {
             </Card>
           </Col>
 
-          {/* Operational Controls & Maintenance */}
+          {/* =========================================================================
+              SECTION 3: OPERATIONAL CONTROLS & MAINTENANCE
+              ========================================================================= */}
           <Col md={12}>
             <Card className="shadow-sm">
               <Card.Header className="bg-light fw-bold d-flex align-items-center">
@@ -246,6 +299,7 @@ export default function AdminSettingsPage() {
                 Operational Status & Service Maintenance
               </Card.Header>
               <Card.Body>
+                {/* Maintenance Mode Toggle */}
                 <div className="d-flex align-items-center justify-content-between p-3 border rounded mb-3 bg-light">
                   <div>
                     <h6 className="fw-bold mb-1">Maintenance Mode</h6>
@@ -268,6 +322,7 @@ export default function AdminSettingsPage() {
                   />
                 </div>
 
+                {/* Maintenance Banner Notice */}
                 <Form.Group controlId="maintenanceMessage">
                   <Form.Label className="fw-semibold small">Maintenance Banner Notice</Form.Label>
                   <Form.Control

@@ -20,26 +20,69 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { formatMoney } from '../../utils/formatMoney.js';
 import { formatDateTime } from '../../utils/formatDate.js';
 
+/**
+ * ============================================================================
+ * StaffCashOperationPage Component (Teller Cash Desk)
+ * ============================================================================
+ * 
+ * Purpose:
+ * Provides a secure, auditable counter cash desk terminal for authorized Bank Staff.
+ * Tellers use this interface to execute physical cash deposits and cash withdrawals
+ * on customer accounts, print instant transaction receipts, and perform compensating
+ * reversals for mis-keyed entries.
+ *
+ * Core Features:
+ * 1. Multi-Criteria Account Search:
+ *    Tellers can look up active accounts by typing any of:
+ *    - Bank Account Number (e.g. 100000000001)
+ *    - Customer Full Name (e.g. Sunil Perera)
+ *    - National Identity Card (NIC) (e.g. 198512345678)
+ *    - Registered Email Address (e.g. sunil@bankdemo.lk)
+ *
+ * 2. Instant Balance Guard & Validation:
+ *    - Prevents overdraft on cash withdrawals by validating the requested
+ *      amount against the live account balance.
+ *    - Enforces teller explanatory remarks for regulatory compliance.
+ *
+ * 3. Idempotent Request Execution:
+ *    - Sends a unique idempotency key with each request to protect against
+ *      accidental double-charges on network lag.
+ *
+ * 4. Immutable Accounting & Compensation Reversals:
+ *    - Financial ledger rows in banking are strictly append-only.
+ *    - Erroneous teller entries cannot be deleted; they must be reversed via
+ *      a linked compensating entry with an audited business justification.
+ * ============================================================================
+ */
 export default function StaffCashOperationPage() {
   const { showSuccess, showError } = useToast();
 
+  // --------------------------------------------------------------------------
+  // Component State
+  // --------------------------------------------------------------------------
+  
+  // List of recent cash desk operations posted today
   const [operations, setOperations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  // Modal states for compensation reversal and receipt display
   const [selectedOperation, setSelectedOperation] = useState(null);
   const [showCompensateModal, setShowCompensateModal] = useState(false);
   const [compensating, setCompensating] = useState(false);
   const [compensationReason, setCompensationReason] = useState('');
   const [receiptModalData, setReceiptModalData] = useState(null);
 
-  // Account search & selection state
+  // --------------------------------------------------------------------------
+  // Account Search & Selection State
+  // --------------------------------------------------------------------------
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [manualIdEntry, setManualIdEntry] = useState(false);
 
-  // Form for new cash operation
+  // React Hook Form for capturing and validating cash operation input
   const {
     register,
     handleSubmit,
@@ -56,9 +99,16 @@ export default function StaffCashOperationPage() {
     },
   });
 
+  // Watchers for dynamic UI feedback (e.g. displaying withdrawal limits)
   const selectedType = watch('type');
   const enteredAmount = watch('amount');
 
+  // --------------------------------------------------------------------------
+  // Data Fetching: Recent Teller Operations
+  // --------------------------------------------------------------------------
+  /**
+   * Loads recent cash transactions recorded across the cash desk today.
+   */
   const fetchOperations = async () => {
     try {
       setLoading(true);
@@ -75,7 +125,13 @@ export default function StaffCashOperationPage() {
     fetchOperations();
   }, []);
 
-  // Search accounts by account number, customer name, email, or NIC
+  // --------------------------------------------------------------------------
+  // Multi-Criteria Account Search Handler
+  // --------------------------------------------------------------------------
+  /**
+   * Queries the backend search endpoint using account number, name, NIC, or email.
+   * Restricts search results strictly to 'ACTIVE' status bank accounts.
+   */
   const handleSearchAccounts = async (e) => {
     if (e) e.preventDefault();
     if (!searchQuery.trim()) {
@@ -101,6 +157,9 @@ export default function StaffCashOperationPage() {
     }
   };
 
+  /**
+   * Sets the chosen account into state and syncs the form's accountId field.
+   */
   const handleSelectAccount = (acc) => {
     setSelectedAccount(acc);
     setValue('accountId', acc.id, { shouldValidate: true });
@@ -108,13 +167,23 @@ export default function StaffCashOperationPage() {
     setSearchQuery('');
   };
 
+  /**
+   * Clears the currently selected account so the teller can search for another.
+   */
   const handleClearSelectedAccount = () => {
     setSelectedAccount(null);
     setValue('accountId', '', { shouldValidate: true });
   };
 
+  // --------------------------------------------------------------------------
+  // Form Submission: Post Cash Transaction
+  // --------------------------------------------------------------------------
+  /**
+   * Submits a cash deposit or cash withdrawal to the backend.
+   * Performs client-side overdraft guard for withdrawals.
+   */
   const onSubmitOperation = async (values) => {
-    // Validate withdrawal balance
+    // Overdraft protection check on withdrawals
     if (values.type === 'WITHDRAWAL' && selectedAccount) {
       const amountNum = Number(values.amount);
       if (amountNum > Number(selectedAccount.balance)) {
@@ -127,6 +196,8 @@ export default function StaffCashOperationPage() {
 
     try {
       setSubmitting(true);
+
+      // Generate a unique client-side idempotency key to prevent double posting
       const requestKey = 'CASH-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
       const payload = {
         accountId: Number(values.accountId),
@@ -136,11 +207,18 @@ export default function StaffCashOperationPage() {
         requestKey,
       };
 
+      // Call teller desk cash operation API
       const res = await cashOperationsApi.postCashOperation(payload);
       showSuccess(`Cash ${values.type} completed successfully!`);
+
+      // Open the instant printable receipt modal
       setReceiptModalData(res.data.data);
+
+      // Reset form fields
       reset({ accountId: '', type: 'DEPOSIT', amount: '', explanation: '' });
       setSelectedAccount(null);
+
+      // Refresh recent operations table
       fetchOperations();
     } catch (err) {
       showError(err.apiError?.message || 'Failed to post cash operation.');
@@ -149,12 +227,22 @@ export default function StaffCashOperationPage() {
     }
   };
 
+  // --------------------------------------------------------------------------
+  // Compensation Reversal Handlers
+  // --------------------------------------------------------------------------
+  /**
+   * Opens the confirmation modal to initiate an immutable compensation reversal.
+   */
   const handleOpenCompensate = (op) => {
     setSelectedOperation(op);
     setCompensationReason('');
     setShowCompensateModal(true);
   };
 
+  /**
+   * Submits the compensation reversal request to the backend.
+   * Appends an opposing ledger entry (e.g. Credit becomes Debit).
+   */
   const handleConfirmCompensation = async () => {
     if (!compensationReason.trim()) {
       showError('Please enter a reason for this compensation.');
@@ -178,11 +266,14 @@ export default function StaffCashOperationPage() {
 
   return (
     <div className="container py-4">
+      {/* ------------------------------------------------------------------ */}
+      {/* Top Header & Refresh Toolbar */}
+      {/* ------------------------------------------------------------------ */}
       <div className="d-flex align-items-center justify-content-between mb-4">
         <div>
           <h2 className="fw-bold mb-1">Teller Cash Desk Operations</h2>
           <p className="text-muted mb-0">
-            Process cash deposits and cash withdrawals on customer accounts with instant receipting.
+            Process over-the-counter cash deposits and cash withdrawals with instant receipting.
           </p>
         </div>
         <Button variant="outline-secondary" onClick={fetchOperations} disabled={loading}>
@@ -191,13 +282,16 @@ export default function StaffCashOperationPage() {
       </div>
 
       <Row className="g-4 mb-4">
-        {/* Post Operation Form */}
+        {/* ---------------------------------------------------------------- */}
+        {/* Left Column: New Cash Transaction Form */}
+        {/* ---------------------------------------------------------------- */}
         <Col lg={5}>
           <Card className="shadow-sm border-0">
             <Card.Header className="bg-light fw-bold d-flex justify-content-between align-items-center">
               <span>
                 <i className="bi bi-cash-stack me-2 text-primary"></i>New Cash Transaction
               </span>
+              {/* Optional toggle to allow direct ID entry if preferred */}
               <Button
                 variant="link"
                 size="sm"
@@ -208,7 +302,9 @@ export default function StaffCashOperationPage() {
               </Button>
             </Card.Header>
             <Card.Body>
-              {/* Account Search Interface */}
+              {/* ------------------------------------------------------------ */}
+              {/* Multi-Criteria Account Search Panel */}
+              {/* ------------------------------------------------------------ */}
               {!manualIdEntry && (
                 <div className="mb-3">
                   <Form.Label className="fw-semibold">Find Customer Account</Form.Label>
@@ -236,7 +332,7 @@ export default function StaffCashOperationPage() {
                         Lookup active accounts by full name, NIC, account number, or email.
                       </Form.Text>
 
-                      {/* Search Results Dropdown/List */}
+                      {/* Dropdown list of matching accounts */}
                       {searchResults.length > 0 && (
                         <ListGroup className="mt-2 shadow-sm border rounded">
                           {searchResults.map((acc) => (
@@ -309,8 +405,11 @@ export default function StaffCashOperationPage() {
                 </div>
               )}
 
+              {/* ------------------------------------------------------------ */}
+              {/* Cash Operation Transaction Form */}
+              {/* ------------------------------------------------------------ */}
               <Form onSubmit={handleSubmit(onSubmitOperation)}>
-                {/* Manual Account ID Field (only shown if toggled or selected via search) */}
+                {/* Manual Account ID Field (only shown if toggled) */}
                 {manualIdEntry && (
                   <Form.Group className="mb-3">
                     <Form.Label className="fw-semibold">Account ID</Form.Label>
@@ -345,7 +444,7 @@ export default function StaffCashOperationPage() {
                   </div>
                 )}
 
-                {/* Operation Type */}
+                {/* Operation Type: DEPOSIT vs WITHDRAWAL */}
                 <Form.Group className="mb-3">
                   <Form.Label className="fw-semibold">Operation Type</Form.Label>
                   <Form.Select {...register('type', { required: true })}>
@@ -354,7 +453,7 @@ export default function StaffCashOperationPage() {
                   </Form.Select>
                 </Form.Group>
 
-                {/* Amount */}
+                {/* Transaction Amount in LKR */}
                 <Form.Group className="mb-3">
                   <Form.Label className="fw-semibold">Amount (LKR)</Form.Label>
                   <InputGroup>
@@ -382,7 +481,7 @@ export default function StaffCashOperationPage() {
                   )}
                 </Form.Group>
 
-                {/* Explanation */}
+                {/* Teller Remarks / Explanation for audit logs */}
                 <Form.Group className="mb-4">
                   <Form.Label className="fw-semibold">Teller Remarks / Explanation</Form.Label>
                   <Form.Control
@@ -400,6 +499,7 @@ export default function StaffCashOperationPage() {
                   </Form.Control.Feedback>
                 </Form.Group>
 
+                {/* Submit Transaction Button */}
                 <Button
                   variant="primary"
                   type="submit"
@@ -420,7 +520,9 @@ export default function StaffCashOperationPage() {
           </Card>
         </Col>
 
-        {/* History Table */}
+        {/* ---------------------------------------------------------------- */}
+        {/* Right Column: Recent Operations Table */}
+        {/* ---------------------------------------------------------------- */}
         <Col lg={7}>
           <Card className="shadow-sm border-0">
             <Card.Header className="bg-light fw-bold">
@@ -490,7 +592,9 @@ export default function StaffCashOperationPage() {
         </Col>
       </Row>
 
-      {/* Receipt Modal */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Instant Transaction Receipt Modal */}
+      {/* ------------------------------------------------------------------ */}
       <Modal show={!!receiptModalData} onHide={() => setReceiptModalData(null)} centered>
         <Modal.Header closeButton>
           <Modal.Title className="fw-bold">
@@ -540,7 +644,9 @@ export default function StaffCashOperationPage() {
         </Modal.Footer>
       </Modal>
 
-      {/* Compensation Reversal Modal */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Compensation Reversal Confirmation Modal */}
+      {/* ------------------------------------------------------------------ */}
       <Modal show={showCompensateModal} onHide={() => setShowCompensateModal(false)} centered>
         <Modal.Header closeButton>
           <Modal.Title className="fw-bold text-danger">

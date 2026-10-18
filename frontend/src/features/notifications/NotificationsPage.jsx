@@ -4,9 +4,26 @@ import { notificationApi } from '../../api/notifications.api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { formatDateTime } from '../../utils/formatDate.js';
 
+/**
+ * Notifications Management & Activity Feed View.
+ *
+ * Provides real-time and historical notification tracking for authenticated users:
+ * 1. Category Classification:
+ *    - Maps backend `NotificationType` enums to intuitive visual icons (bank, transfer, bill, support, security).
+ *
+ * 2. Read State Lifecycle:
+ *    - Unread items are highlighted with a primary border accent and 'New' badge.
+ *    - Users can acknowledge individual notifications via the checkmark action,
+ *      or mark all notifications as read in a single batch operation.
+ *
+ * 3. Pagination Support:
+ *    - Handles server-side pagination with page sizes of 15 entries, ensuring smooth scrolling
+ *      and low memory footprint for high-activity accounts.
+ */
 export default function NotificationsPage() {
   const { showSuccess, showError } = useToast();
 
+  // State management
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
@@ -14,6 +31,11 @@ export default function NotificationsPage() {
   const [totalElements, setTotalElements] = useState(0);
   const [actionLoading, setActionLoading] = useState(false);
 
+  /**
+   * Fetches paginated notifications for the current authenticated user.
+   *
+   * @param {number} targetPage - Zero-based page index.
+   */
   const fetchNotifications = async (targetPage = 0) => {
     try {
       setLoading(true);
@@ -31,10 +53,17 @@ export default function NotificationsPage() {
     }
   };
 
+  // Re-fetch when active page changes
   useEffect(() => {
     fetchNotifications(page);
   }, [page]);
 
+  /**
+   * Marks a single notification as read.
+   * Optimistically updates the notification list in React state.
+   *
+   * @param {number} id - Notification primary key ID.
+   */
   const handleMarkAsRead = async (id) => {
     try {
       await notificationApi.markAsRead(id);
@@ -47,6 +76,9 @@ export default function NotificationsPage() {
     }
   };
 
+  /**
+   * Marks all unread notifications for the user as read in bulk.
+   */
   const handleMarkAllRead = async () => {
     try {
       setActionLoading(true);
@@ -60,6 +92,12 @@ export default function NotificationsPage() {
     }
   };
 
+  /**
+   * Resolves the appropriate Bootstrap icon and color scheme based on notification event type.
+   *
+   * @param {string} type - NotificationType enum string.
+   * @returns {JSX.Element}
+   */
   const getNotificationIcon = (type) => {
     switch (type) {
       case 'ACCOUNT_APPROVED':
@@ -81,6 +119,7 @@ export default function NotificationsPage() {
 
   return (
     <div className="container-fluid py-2">
+      {/* Page Header and Bulk Actions */}
       <div className="d-flex justify-content-between align-items-center mb-4 pb-2 border-bottom">
         <div>
           <h2 className="h4 fw-bold mb-1">Notifications</h2>
@@ -110,6 +149,7 @@ export default function NotificationsPage() {
         </div>
       </div>
 
+      {/* Main Content Area */}
       {loading ? (
         <div className="text-center py-5">
           <Spinner animation="border" variant="primary" role="status" />
@@ -167,6 +207,7 @@ export default function NotificationsPage() {
             ))}
           </ListGroup>
 
+          {/* Pagination Controls */}
           {totalPages > 1 && (
             <Card.Footer className="bg-white d-flex justify-content-between align-items-center py-2">
               <span className="text-muted small">

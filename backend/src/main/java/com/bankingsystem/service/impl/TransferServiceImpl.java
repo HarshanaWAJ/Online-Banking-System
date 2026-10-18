@@ -32,8 +32,26 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Transfer service implementing atomic double-entry bookkeeping,
- * ascending ID locking to eliminate deadlocks, and idempotency protection.
+ * Enterprise Transfer Service Implementation.
+ *
+ * Core Engineering & Financial Guarantees:
+ * 1. Concurrency Control & Deadlock Elimination:
+ *    - To transfer funds between two accounts (A and B), locks must be acquired on both account rows.
+ *    - If User 1 transfers from A to B while User 2 transfers from B to A simultaneously, a circular wait deadlock occurs.
+ *    - Algorithm: We acquire pessimistic write locks (`SELECT ... FOR UPDATE`) strictly in ASCENDING account ID order:
+ *      {@code firstLockId = min(A.id, B.id); secondLockId = max(A.id, B.id);}
+ *      Because all concurrent threads acquire row locks in the exact same sequence, circular dependency is mathematically impossible.
+ *
+ * 2. Strict Double-Entry Bookkeeping:
+ *    - Money is never created or destroyed: every transfer produces exactly two synchronized {@link LedgerEntry} rows:
+ *      a) A DEBIT entry reducing the source account balance.
+ *      b) A CREDIT entry increasing the destination account balance.
+ *    - Both entries record the identical transaction reference and snapshot the account balance post-mutation.
+ *
+ * 3. Idempotency Protection:
+ *    - Every transfer submission includes a client-generated UUID `requestKey`.
+ *    - If network lag causes duplicate submits or retries, the server detects the existing (userId, requestKey)
+ *      tuple and safely returns the original transfer receipt without executing a second balance deduction.
  */
 @Service
 public class TransferServiceImpl implements TransferService {
@@ -63,6 +81,15 @@ public class TransferServiceImpl implements TransferService {
     this.notificationService = notificationService;
   }
 
+  /**
+   * Preview a transfer prior to execution (Dry-run validation).
+   *
+   * Verifies account ownership, account status, destination account validity, and balance sufficiency
+   * without locking rows or modifying the database ledger.
+   *
+   * @param request Transfer preview payload.
+   * @return Preview response containing verified recipient name and available balance.
+   */
   @Override
   @Transactional(readOnly = true)
   public TransferPreviewResponse previewTransfer(TransferPreviewRequest request) {
@@ -70,6 +97,7 @@ public class TransferServiceImpl implements TransferService {
     Customer customer = customerRepository.findByUserId(user.getId())
         .orElseThrow(() -> new BusinessRuleException("Customer profile not found"));
 
+    // Verify source account exists and belongs to the authenticated customer
     BankAccount source = accountRepository.findById(request.sourceAccountId())
         .orElseThrow(() -> new ResourceNotFoundException("Source BankAccount", request.sourceAccountId()));
 
@@ -81,10 +109,12 @@ public class TransferServiceImpl implements TransferService {
       throw new BusinessRuleException("Source account is not ACTIVE. Current status: " + source.getStatus());
     }
 
+    // Verify destination account exists and is active
     String destAccNum = request.destinationAccountNumber().trim();
     BankAccount dest = accountRepository.findByAccountNumber(destAccNum)
         .orElseThrow(() -> new BusinessRuleException("Destination account number '" + destAccNum + "' was not found."));
 
+    // Prevent transferring funds to the exact same account
     if (source.getId().equals(dest.getId())) {
       throw new BusinessRuleException("Source and destination accounts cannot be the same.");
     }
@@ -93,7 +123,10 @@ public class TransferServiceImpl implements TransferService {
       throw new BusinessRuleException("Destination account is currently not active for transactions.");
     }
 
+    // Verify amount positivity and scale
     BigDecimal validAmount = MoneyUtil.requireValidAmount(request.amount());
+
+    // Verify preliminary balance sufficiency
     if (source.getBalance().compareTo(validAmount) < 0) {
       throw new BusinessRuleException(
           String.format("Insufficient funds. Available balance: LKR %s, requested: LKR %s",
@@ -109,6 +142,19 @@ public class TransferServiceImpl implements TransferService {
         source.getBalance());
   }
 
+  /**
+   * Executes an atomic inter-account fund transfer.
+   *
+   * Workflow:
+   * 1. Idempotency Check: Verifies if (userId, requestKey) was previously processed.
+   * 2. Lock Acquisition: Acquires pessimistic write locks on both accounts in ascending ID order.
+   * 3. Balance Re-Verification: Ensures funds are still sufficient under the row lock.
+   * 4. Double-Entry Mutation: Updates account balances, inserts debit/credit ledger records.
+   * 5. Notifications & Audit: Dispatches in-app notifications to both parties and logs audit event.
+   *
+   * @param request Confirmed transfer request payload with requestKey.
+   * @return Immutable transfer confirmation response.
+   */
   @Override
   @Transactional
   public TransferResponse postTransfer(PostTransferRequest request) {
@@ -118,7 +164,7 @@ public class TransferServiceImpl implements TransferService {
 
     String reqKey = request.requestKey().trim();
 
-    // Idempotency check: if transfer already exists with this user & requestKey, return original record
+    // Step 1: Idempotency check: if transfer already exists with this user & requestKey, return original record
     var existingTransfer = transferRepository.findByInitiatedByAndRequestKey(user.getId(), reqKey);
     if (existingTransfer.isPresent()) {
       return mapToResponse(existingTransfer.get());
@@ -126,7 +172,7 @@ public class TransferServiceImpl implements TransferService {
 
     BigDecimal transferAmount = MoneyUtil.requireValidAmount(request.amount());
 
-    // Locate source and destination un-locked first to determine lock order
+    // Step 2: Locate source and destination un-locked first to determine lock acquisition order
     BankAccount sourceUnchecked = accountRepository.findById(request.sourceAccountId())
         .orElseThrow(() -> new ResourceNotFoundException("Source BankAccount", request.sourceAccountId()));
 
@@ -142,7 +188,7 @@ public class TransferServiceImpl implements TransferService {
       throw new BusinessRuleException("Source and destination accounts cannot be the same.");
     }
 
-    // PESSIMISTIC_WRITE Lock Acquisition in ASCENDING ID order to avoid database deadlocks
+    // Step 3: PESSIMISTIC_WRITE Lock Acquisition in ASCENDING ID order to eliminate database deadlocks
     Long firstLockId = Math.min(sourceUnchecked.getId(), destUnchecked.getId());
     Long secondLockId = Math.max(sourceUnchecked.getId(), destUnchecked.getId());
 
@@ -154,7 +200,7 @@ public class TransferServiceImpl implements TransferService {
     BankAccount source = sourceUnchecked.getId().equals(firstLocked.getId()) ? firstLocked : secondLocked;
     BankAccount dest = destUnchecked.getId().equals(firstLocked.getId()) ? firstLocked : secondLocked;
 
-    // Verify status on locked entities
+    // Step 4: Verify status on locked entities
     if (source.getStatus() != AccountStatus.ACTIVE) {
       throw new BusinessRuleException("Source account is not ACTIVE.");
     }
@@ -162,24 +208,24 @@ public class TransferServiceImpl implements TransferService {
       throw new BusinessRuleException("Destination account is not ACTIVE.");
     }
 
-    // Verify balance on locked entity
+    // Step 5: Verify balance on locked entity (authoritative check)
     if (source.getBalance().compareTo(transferAmount) < 0) {
       throw new BusinessRuleException(
           String.format("Insufficient funds. Available balance: LKR %s, requested: LKR %s",
               source.getBalance(), transferAmount));
     }
 
-    // Debit source
+    // Step 6: Debit source account
     BigDecimal sourceNewBalance = source.getBalance().subtract(transferAmount);
     source.setBalance(sourceNewBalance);
     accountRepository.save(source);
 
-    // Credit destination
+    // Step 7: Credit destination account
     BigDecimal destNewBalance = dest.getBalance().add(transferAmount);
     dest.setBalance(destNewBalance);
     accountRepository.save(dest);
 
-    // Create AccountTransfer
+    // Step 8: Create and persist AccountTransfer audit record
     String reference = ReferenceGenerator.generateTransferReference();
     AccountTransfer transfer = new AccountTransfer(
         reference,
@@ -193,13 +239,13 @@ public class TransferServiceImpl implements TransferService {
     try {
       transfer = transferRepository.save(transfer);
     } catch (DataIntegrityViolationException ex) {
-      // Race condition protection: re-read already committed record
+      // Race condition protection: re-read already committed record if duplicate request key arrived concurrently
       return transferRepository.findByInitiatedByAndRequestKey(user.getId(), reqKey)
           .map(this::mapToResponse)
           .orElseThrow(() -> ex);
     }
 
-    // Double-entry bookkeeping: DEBIT entry for source account
+    // Step 9: Double-entry bookkeeping: DEBIT entry for source account
     LedgerEntry debitEntry = new LedgerEntry(
         source,
         EntryDirection.DEBIT,
@@ -213,7 +259,7 @@ public class TransferServiceImpl implements TransferService {
         user.getId());
     ledgerEntryRepository.save(debitEntry);
 
-    // Double-entry bookkeeping: CREDIT entry for destination account
+    // Step 10: Double-entry bookkeeping: CREDIT entry for destination account
     LedgerEntry creditEntry = new LedgerEntry(
         dest,
         EntryDirection.CREDIT,
@@ -227,7 +273,7 @@ public class TransferServiceImpl implements TransferService {
         user.getId());
     ledgerEntryRepository.save(creditEntry);
 
-    // In-app notifications
+    // Step 11: Dispatch in-app notifications to sender and receiver
     notificationService.createNotification(
         source.getCustomer().getUser(),
         NotificationType.TRANSFER_SENT,
@@ -240,7 +286,7 @@ public class TransferServiceImpl implements TransferService {
         String.format("Received transfer of LKR %s from %s. Reference: %s", transferAmount, source.getAccountNumber(), reference),
         "/accounts/" + dest.getId());
 
-    // Audit event
+    // Step 12: Record security audit log
     auditService.recordEvent(
         user.getId(),
         user.getRole(),
@@ -254,6 +300,9 @@ public class TransferServiceImpl implements TransferService {
     return mapToResponse(transfer);
   }
 
+  /**
+   * Retrieves a transfer record by ID with ownership enforcement.
+   */
   @Override
   @Transactional(readOnly = true)
   public TransferResponse getTransferById(Long id) {
@@ -261,7 +310,7 @@ public class TransferServiceImpl implements TransferService {
     AccountTransfer transfer = transferRepository.findById(id)
         .orElseThrow(() -> new ResourceNotFoundException("Transfer", id));
 
-    // Verify ownership
+    // Non-staff/admin users can only view transfers they initiated
     if (!transfer.getInitiatedBy().equals(user.getId()) &&
         !user.getRole().name().equals("STAFF") &&
         !user.getRole().name().equals("ADMIN")) {
@@ -271,6 +320,9 @@ public class TransferServiceImpl implements TransferService {
     return mapToResponse(transfer);
   }
 
+  /**
+   * Maps an internal AccountTransfer entity to a public TransferResponse DTO.
+   */
   private TransferResponse mapToResponse(AccountTransfer t) {
     return new TransferResponse(
         t.getId(),

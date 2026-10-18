@@ -9,11 +9,13 @@ import NotFoundPage from '../pages/NotFoundPage.jsx';
 import ProtectedRoute from './ProtectedRoute.jsx';
 import PATHS from './routePaths.js';
 
-// Feature Pages
+// Feature Pages: Authentication & Profile
 import LoginPage from '../features/auth/LoginPage.jsx';
 import RegisterPage from '../features/auth/RegisterPage.jsx';
 import ChangePasswordPage from '../features/auth/ChangePasswordPage.jsx';
 import ProfilePage from '../features/customers/ProfilePage.jsx';
+
+// Feature Pages: Accounts & Transactions
 import CustomerDashboardPage from '../features/accounts/CustomerDashboardPage.jsx';
 import RequestAccountPage from '../features/accounts/RequestAccountPage.jsx';
 import StaffAccountRequestsPage from '../features/accounts/StaffAccountRequestsPage.jsx';
@@ -21,11 +23,15 @@ import BeneficiaryListPage from '../features/beneficiaries/BeneficiaryListPage.j
 import TransferPage from '../features/transfers/TransferPage.jsx';
 import TransactionHistoryPage from '../features/transactions/TransactionHistoryPage.jsx';
 import StaffCashOperationPage from '../features/cash-operations/StaffCashOperationPage.jsx';
+
+// Feature Pages: Bill Payments & Service Requests
 import PayBillPage from '../features/bill-payments/PayBillPage.jsx';
 import BillPaymentHistoryPage from '../features/bill-payments/BillPaymentHistoryPage.jsx';
 import AdminBillerListPage from '../features/admin/AdminBillerListPage.jsx';
 import CustomerServiceRequestsPage from '../features/service-requests/CustomerServiceRequestsPage.jsx';
 import StaffServiceRequestsPage from '../features/service-requests/StaffServiceRequestsPage.jsx';
+
+// Feature Pages: Staff & Admin Management
 import AdminUsersPage from '../features/admin/AdminUsersPage.jsx';
 import ReportsDashboardPage from '../features/reports/ReportsDashboardPage.jsx';
 import AdminAuditLogPage from '../features/admin/AdminAuditLogPage.jsx';
@@ -34,12 +40,24 @@ import NotificationsPage from '../features/notifications/NotificationsPage.jsx';
 import StaffCustomerDirectoryPage from '../features/customers/StaffCustomerDirectoryPage.jsx';
 
 /**
- * Directs authenticated users to their role landing dashboard, or guests to login.
+ * Root Landing Redirector (`/`).
+ *
+ * Dynamically resolves the starting screen based on the user's role:
+ * - Unauthenticated / Guest -> `/login`
+ * - ADMIN -> `/admin/users` (User management console)
+ * - STAFF -> `/staff/account-requests` (Pending applications queue)
+ * - CUSTOMER -> `/dashboard` (Customer accounts overview)
  */
 function RootRedirect() {
   const { user, loading } = useAuth();
+
+  // Defer redirect until AuthContext finishes checking the session cookie
   if (loading) return null;
+
+  // Unauthenticated visitors are sent to the login screen
   if (!user) return <Navigate to={PATHS.LOGIN} replace />;
+
+  // Direct users to their primary workspace depending on their role
   if (user.role === 'ADMIN') return <Navigate to={PATHS.ADMIN_USERS} replace />;
   if (user.role === 'STAFF') return <Navigate to={PATHS.STAFF_ACCOUNT_REQUESTS} replace />;
   return <Navigate to={PATHS.DASHBOARD} replace />;
@@ -47,17 +65,28 @@ function RootRedirect() {
 
 /**
  * Main application routes hierarchy.
+ *
+ * Architecture:
+ * - Uses React Router v6 nested routes pattern.
+ * - Outlets within layout components (`PublicLayout`, `CustomerLayout`, `StaffLayout`, `AdminLayout`)
+ *   render child components inside consistent navigational chrome (navbars, sidebars, footers).
+ * - Routes are wrapped in `<ProtectedRoute>` to guard access based on user role.
  */
 export default function AppRoutes() {
   return (
     <Routes>
-      {/* Public routes */}
+      {/* =========================================================================
+          1. PUBLIC ROUTES (Unauthenticated Guest Zone)
+          ========================================================================= */}
       <Route element={<PublicLayout />}>
         <Route path={PATHS.LOGIN} element={<LoginPage />} />
         <Route path={PATHS.REGISTER} element={<RegisterPage />} />
       </Route>
 
-      {/* Customer routes */}
+      {/* =========================================================================
+          2. CUSTOMER PORTAL ROUTES (Role: CUSTOMER)
+          Requires authenticated user with CUSTOMER role.
+          ========================================================================= */}
       <Route
         element={
           <ProtectedRoute allowedRoles={['CUSTOMER']}>
@@ -81,7 +110,10 @@ export default function AppRoutes() {
         <Route path={PATHS.CHANGE_PASSWORD} element={<ChangePasswordPage />} />
       </Route>
 
-      {/* Staff routes */}
+      {/* =========================================================================
+          3. STAFF OPERATIONAL ROUTES (Role: STAFF)
+          Requires authenticated employee with STAFF role.
+          ========================================================================= */}
       <Route
         element={
           <ProtectedRoute allowedRoles={['STAFF']}>
@@ -101,7 +133,10 @@ export default function AppRoutes() {
         <Route path={PATHS.CHANGE_PASSWORD} element={<ChangePasswordPage />} />
       </Route>
 
-      {/* Admin routes */}
+      {/* =========================================================================
+          4. ADMIN GOVERNANCE ROUTES (Role: ADMIN)
+          Requires authenticated administrator with ADMIN role.
+          ========================================================================= */}
       <Route
         element={
           <ProtectedRoute allowedRoles={['ADMIN']}>
@@ -118,11 +153,16 @@ export default function AppRoutes() {
         <Route path={PATHS.CHANGE_PASSWORD} element={<ChangePasswordPage />} />
       </Route>
 
-      {/* Default root redirect */}
+      {/* =========================================================================
+          5. ROOT ENTRY POINT & SYSTEM ERROR STATUS PAGES
+          ========================================================================= */}
+      {/* Root path '/' delegates to smart role-based redirect */}
       <Route path="/" element={<RootRedirect />} />
 
-      {/* Status pages */}
+      {/* 403 Forbidden Access Denied Page */}
       <Route path={PATHS.FORBIDDEN} element={<ForbiddenPage />} />
+
+      {/* 404 Catch-All Page for unmatched paths */}
       <Route path={PATHS.NOT_FOUND} element={<NotFoundPage />} />
     </Routes>
   );
