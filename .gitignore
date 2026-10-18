@@ -1,0 +1,34 @@
+# Build artifacts
+target/
+dist/
+build/
+
+# Environment files (never commit real secrets)
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+.npm/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Java / Maven
+*.class
+*.jar
+*.war
+*.ear
+
+# Vite
+.vite/

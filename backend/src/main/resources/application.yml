@@ -1,0 +1,84 @@
+spring:
+  config:
+    import: optional:file:./.env[.properties]
+  application:
+    name: banking-system
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME:}
+    password: ${DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:30000}
+      idle-timeout: ${DB_POOL_IDLE_TIMEOUT_MS:600000}
+      max-lifetime: ${DB_POOL_MAX_LIFETIME_MS:1800000}
+  jpa:
+    hibernate:
+      # Typical Spring Boot ORM auto-table creation: 'update' automatically updates/creates schema
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+        jdbc:
+          time_zone: UTC
+
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: strict
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+
+app:
+  cors:
+    allowed-origin: ${CLIENT_ORIGIN:http://localhost:5173}
+  jwt:
+    secret: ${JWT_SECRET}
+    expires-minutes: ${JWT_EXPIRES_MINUTES:30}
+  cookie:
+    name: ${COOKIE_NAME:bank_session}
+    secure: ${COOKIE_SECURE:false}
+  bcrypt:
+    strength: ${BCRYPT_STRENGTH:12}
+  rate-limit:
+    login-max-attempts: ${LOGIN_RATE_LIMIT_MAX_ATTEMPTS:5}
+    login-window-minutes: ${LOGIN_RATE_LIMIT_WINDOW_MINUTES:15}
+  db:
+    lock-timeout-ms: ${DB_LOCK_TIMEOUT_MS:5000}
+  seed:
+    enabled: ${SEED_ENABLED:true}
+    admin-email: ${SEED_ADMIN_EMAIL:admin@bankdemo.lk}
+    admin-password: ${SEED_ADMIN_PASSWORD:Admin@12345}
+    staff-email: ${SEED_STAFF_EMAIL:staff@bankdemo.lk}
+    staff-password: ${SEED_STAFF_PASSWORD:Staff@12345}
+    demo-customer-password: ${SEED_DEMO_CUSTOMER_PASSWORD:Customer@12345}
+
+logging:
+  level:
+    root: ${LOG_LEVEL:INFO}
+    com.bankingsystem: ${LOG_LEVEL:INFO}
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui
